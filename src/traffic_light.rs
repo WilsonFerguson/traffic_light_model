@@ -91,26 +91,17 @@ impl TrafficLight {
             && self.past_green.is_some()
             && self.longest_queue().0 == self.past_green.unwrap()
         {
-            self.should_switch = false;
-            self.phase_start = Instant::now();
-            self.green = self.past_green;
-            self.next_green = None;
+            self.change_light();
         }
         // If it's past yellow, calculate the next green
         if self.should_switch && self.red_start.elapsed() >= self.yellow_time {
             self.next_green = Some(self.longest_queue().0);
         }
         if self.should_switch && self.red_start.elapsed() >= self.red_clearance_time {
-            self.phase_start = Instant::now();
-
-            self.green = self.next_green;
-            self.next_green = None;
-
-            self.last_went
-                .entry(self.green.unwrap())
-                .and_modify(|x| *x = Instant::now());
-
-            self.should_switch = false;
+            // self.last_went
+            //     .entry(self.green.unwrap())
+            //     .and_modify(|x| *x = Instant::now());
+            self.change_light();
         }
     }
 
@@ -388,23 +379,32 @@ impl TrafficLight {
         let using_green = if self.green.is_some() {
             self.green.unwrap()
         } else {
-            self.past_green.unwrap()
+            if self.past_green.is_some() {
+                self.past_green.unwrap()
+            } else {
+                car::Origin::North
+            }
         };
-        let short_green = (!self.should_switch
+
+        // * 2 for more of a buffer on the clearance time
+        let mut short_green = (!self.should_switch
             || (self.should_switch && self.red_start.elapsed() < self.yellow_time))
             && direction != car::Direction::Left
             && using_green == origin.opposite()
             && self.last_intersection_obstruction.elapsed()
-                > self.red_clearance_time - self.yellow_time;
-        // && self.queue.get(&using_green).unwrap().len() > 0
-        // && self
-        //     .queue
-        //     .get(&using_green)
-        //     .unwrap()
-        //     .get(0)
-        //     .unwrap()
-        //     .direction
-        //     != car::Direction::Left;
+                > (self.red_clearance_time - self.yellow_time) * 2
+            && self.queue.get(&using_green).unwrap().len() > 0
+            && self
+                .queue
+                .get(&using_green)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .direction
+                != car::Direction::Left;
+        if short_green && self.green.is_none() && self.past_green.is_none() {
+            short_green = false;
+        }
         has_green || has_yellow || short_green
     }
 
