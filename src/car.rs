@@ -1,14 +1,17 @@
 use piston_window::*;
 
-use crate::{traffic_light::TrafficLight, HEIGHT, WIDTH};
+use crate::{
+    traffic_light::{self, TrafficLight},
+    HEIGHT, WIDTH,
+};
 
 pub const MAX_SPEED: f64 = 5.0;
-const ACCELERATION: f64 = 0.15;
+pub const ACCELERATION: f64 = 0.15;
 const DECELERATION: f64 = 0.3;
 
 const DISTANCE_THRESHOLD: f64 = 5.0;
 
-const CAR_WIDTH: f64 = 50.0; // 75.0, 50
+pub const CAR_WIDTH: f64 = 50.0; // 75.0, 50
 const CAR_HEIGHT: f64 = 33.0; // 50.0, 33
 const ARROW_STROKE_WEIGHT: f64 = 2.5; //  5.0, 2.5
 
@@ -335,7 +338,15 @@ impl Car {
         })
     }
 
-    fn get_vertex(&self, vertex: (f64, f64)) -> (f64, f64) {
+    // pub fn cars_intersect(
+    //     position1: (f64, f64),
+    //     rotation1: f64,
+    //     position2: (f64, f64),
+    //     rotation2: f64,
+    // ) -> bool {
+    // }
+
+    pub fn get_vertex(&self, vertex: (f64, f64)) -> (f64, f64) {
         (
             self.position.0 + (vertex.0 * self.rotation.to_radians().cos())
                 - (vertex.1 * self.rotation.to_radians().sin()),
@@ -426,6 +437,27 @@ impl Car {
                 graphics,
             );
         });
+    }
+
+    pub fn calculate_waiting_point(
+        car: &traffic_light::SimplifiedCar,
+        path: &Vec<(f64, f64)>,
+    ) -> (f64, f64) {
+        let intersection_point_index = NUM_PATH_POINTS / 3
+            + if car.direction == Direction::Straight {
+                1
+            } else {
+                0
+            };
+        path[intersection_point_index]
+    }
+
+    pub fn calculate_path(car: &traffic_light::SimplifiedCar) -> Vec<(f64, f64)> {
+        match car.direction {
+            Direction::Left => generate_left_turn_path(car.origin),
+            Direction::Right => generate_right_turn_path(car.origin),
+            Direction::Straight => generate_straight_path(car.origin),
+        }
     }
 }
 

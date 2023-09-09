@@ -11,6 +11,8 @@ mod traffic_light;
 pub const WIDTH: u32 = 1280;
 pub const HEIGHT: u32 = 1280;
 
+pub const USE_ENTRY_TIME: bool = false;
+
 fn draw_map(context: &Context, graphics: &mut G2d) {
     let middle = (WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0);
     [
@@ -150,13 +152,14 @@ fn main() {
             traffic_light.draw(&context, graphics);
 
             if spawn_start.elapsed() >= spawn_increment {
-                let minimum_time = 550.0;
+                let minimum_time = 650.0; // 550
                 spawn_increment = time::Duration::from_millis(
                     (spawn_increment.as_millis() as f64 * 0.9975).max(minimum_time) as u64,
                 );
 
                 let mut origin = origins[rand::thread_rng().gen_range(0..origins.len())];
-                if spawn_increment.as_millis() <= 630 {
+                // 630
+                if spawn_increment.as_millis() <= 700 {
                     origin = origins[origin_index];
                     origin_index = (origin_index + 1) % origins.len();
                 }
