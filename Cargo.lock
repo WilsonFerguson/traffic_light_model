@@ -67,6 +67,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "big_traffic_light_model"
+version = "0.1.0"
+dependencies = [
+ "find_folder",
+ "piston_window",
+ "rand",
+]
+
+[[package]]
 name = "bit_field"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1519,15 +1528,6 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "winnow",
-]
-
-[[package]]
-name = "traffic_light_model"
-version = "0.1.0"
-dependencies = [
- "find_folder",
- "piston_window",
- "rand",
 ]
 
 [[package]]
