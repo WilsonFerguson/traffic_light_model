@@ -1,7 +1,7 @@
 use piston_window::*;
 
 use crate::{
-    traffic_light_controller::{self, SimplifiedCar, TrafficLightController},
+    traffic_light::{self, TrafficLight},
     HEIGHT, WIDTH,
 };
 
@@ -15,9 +15,9 @@ pub const CAR_WIDTH: f64 = 50.0; // 75.0, 50
 const CAR_HEIGHT: f64 = 33.0; // 50.0, 33
 const ARROW_STROKE_WEIGHT: f64 = 2.5; //  5.0, 2.5
 
-pub const LANE_WIDTH: f64 = CAR_HEIGHT * 2.0;
+pub const LANE_WIDTH: f64 = CAR_HEIGHT * 1.5;
 
-pub const NUM_PATH_POINTS: usize = 25; // Higher = more accurate path but more expensive
+const NUM_PATH_POINTS: usize = 25; // Higher = more accurate path but more expensive
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Origin {
@@ -45,9 +45,18 @@ impl Origin {
             Origin::West => Origin::South,
         }
     }
+
+    pub fn opposite(&self) -> Origin {
+        match self {
+            Origin::North => Origin::South,
+            Origin::South => Origin::North,
+            Origin::East => Origin::West,
+            Origin::West => Origin::East,
+        }
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Direction {
     Left,
     Right,
@@ -101,7 +110,7 @@ impl Car {
             id,
             origin,
             direction,
-            position: get_position(origin, direction),
+            position: get_position(origin),
             rotation,
             target_rotation: rotation,
             speed: 0.0,
@@ -126,7 +135,7 @@ impl Car {
 
         cars.clone()
             .iter()
-            .filter(|c| c.origin == self.origin && c.direction == self.direction && c.id != self.id)
+            .filter(|c| c.origin == self.origin && c.id != self.id)
             .for_each(|c| {
                 let (x, y) = self.position;
                 let (cx, cy) = c.position;
@@ -171,63 +180,66 @@ impl Car {
         }
     }
 
-    fn stop_for_traffic_light(&mut self, traffic_light: &mut TrafficLightController) {
+    fn stop_for_traffic_light(&mut self, traffic_light: &mut TrafficLight) {
         if self.through_intersection {
             self.stopped = false;
             return;
         }
 
-        // // Red clearance time
-        // if !traffic_light.is_green(self.origin, self.direction) {
-        //     if self.path_index_on_red_change.is_none() {
-        //         self.path_index_on_red_change = Some(self.path_index);
-        //     }
-        //
-        //     // Allow cars in intersection to clear
-        //     if let Some(past_green) = traffic_light.past_green() {
-        //         if past_green == self.origin
-        //             && self.path_index_on_red_change.unwrap() >= self.path_index_at_intersection
-        //         {
-        //             self.through_intersection = true;
-        //             self.stopped = false;
-        //         } else if self.path_index == self.path_index_at_intersection {
-        //             self.stopped = true;
-        //         }
-        //     } else {
-        //         if self.path_index == self.path_index_at_intersection {
-        //             self.stopped = true;
-        //         }
-        //     }
-        //     return;
-        // }
+        // Red clearance time
+        // Condition: not green && not yellow/can't go for other reasons
+        if traffic_light.green().is_none() && !traffic_light.is_green(self.origin, self.direction) {
+            if self.path_index_on_red_change.is_none() {
+                self.path_index_on_red_change = Some(self.path_index);
+            }
+
+            // Allow cars in intersection to clear
+            if let Some(past_green) = traffic_light.past_green() {
+                if past_green == self.origin
+                    && self.path_index_on_red_change.unwrap() >= self.path_index_at_intersection
+                {
+                    self.through_intersection = true;
+                    self.stopped = false;
+                } else if self.path_index == self.path_index_at_intersection {
+                    self.stopped = true;
+                }
+            } else {
+                if self.path_index == self.path_index_at_intersection {
+                    self.stopped = true;
+                }
+            }
+            return;
+        }
+        self.path_index_on_red_change = None;
 
         let mut can_go = traffic_light.is_green(self.origin, self.direction);
         // If it's red but I'm not at the intersection, I can keep going
         if !can_go && self.path_index != self.path_index_at_intersection {
             can_go = true;
         }
-
-        // If it's green, reset path index on red change
-        if can_go {
-            self.path_index_on_red_change = None;
+        // Protected right turns
+        if self.direction == Direction::Right
+            && traffic_light.is_green(self.origin.left(), self.direction)
+        {
+            can_go = true;
         }
 
         self.stopped = !can_go;
     }
 
-    pub fn update(&mut self, cars: &Vec<Car>, traffic_light: &mut TrafficLightController) {
+    pub fn update(&mut self, cars: &Vec<Car>, traffic_light: &mut TrafficLight) {
         // If we have entered the intersection, remove ourselves from the traffic light
         if !self.through_intersection && self.past_intersection() {
             self.through_intersection = true;
-            traffic_light.remove_car(SimplifiedCar::new(self.origin, self.direction));
+            traffic_light.remove_car(self.origin, self.direction);
         }
         // If it's yellow and I'm right at the intersection, remove myself from the traffic light
         // (to update clearance times)
-        if traffic_light.is_yellow(self.origin, self.direction)
+        if traffic_light.is_yellow(self.origin)
             && self.path_index == self.path_index_at_intersection
             && !self.through_intersection
         {
-            traffic_light.remove_car(SimplifiedCar::new(self.origin, self.direction));
+            traffic_light.remove_car(self.origin, self.direction);
             self.through_intersection = true;
         }
 
@@ -408,7 +420,6 @@ impl Car {
     }
 
     pub fn draw(&self, cars: &Vec<Car>, context: &Context, graphics: &mut G2d) {
-        let alpha = 1.0;
         let transform = context
             .transform
             .trans(self.position.0, self.position.1)
@@ -419,9 +430,9 @@ impl Car {
             .filter(|c| c.id != self.id)
             .any(|c| self.intersects_rect(c.vertices()))
         {
-            [1.0, 0.0, 0.0, alpha]
+            [1.0, 0.0, 0.0, 1.0]
         } else {
-            [1.0, 1.0, 1.0, alpha]
+            [1.0; 4]
         };
         rectangle_from_to(
             fill_color,
@@ -432,7 +443,7 @@ impl Car {
         );
 
         match self.direction {
-            Direction::Straight => Line::new_round([0.0, 0.0, 0.0, alpha], ARROW_STROKE_WEIGHT)
+            Direction::Straight => Line::new_round([0.0, 0.0, 0.0, 1.0], ARROW_STROKE_WEIGHT)
                 .draw_arrow(
                     [-CAR_WIDTH / 2.5, 0.0, CAR_WIDTH / 2.5, 0.0],
                     CAR_HEIGHT / 2.5,
@@ -440,7 +451,7 @@ impl Car {
                     transform,
                     graphics,
                 ),
-            Direction::Left => Line::new_round([0.0, 0.0, 0.0, alpha], ARROW_STROKE_WEIGHT)
+            Direction::Left => Line::new_round([0.0, 0.0, 0.0, 1.0], ARROW_STROKE_WEIGHT)
                 .draw_arrow(
                     [0.0, CAR_HEIGHT / 2.5, 0.0, -CAR_HEIGHT / 2.5],
                     CAR_HEIGHT / 2.5,
@@ -448,7 +459,7 @@ impl Car {
                     transform,
                     graphics,
                 ),
-            Direction::Right => Line::new_round([0.0, 0.0, 0.0, alpha], ARROW_STROKE_WEIGHT)
+            Direction::Right => Line::new_round([0.0, 0.0, 0.0, 1.0], ARROW_STROKE_WEIGHT)
                 .draw_arrow(
                     [0.0, -CAR_HEIGHT / 2.5, 0.0, CAR_HEIGHT / 2.5],
                     CAR_HEIGHT / 2.5,
@@ -474,7 +485,7 @@ impl Car {
         });
     }
 
-    pub fn calculate_waiting_point_index(car: &traffic_light_controller::SimplifiedCar) -> usize {
+    pub fn calculate_waiting_point_index(car: &traffic_light::SimplifiedCar) -> usize {
         NUM_PATH_POINTS / 3
             + if car.direction == Direction::Straight {
                 1
@@ -483,7 +494,7 @@ impl Car {
             }
     }
 
-    pub fn calculate_path(car: &traffic_light_controller::SimplifiedCar) -> Vec<(f64, f64)> {
+    pub fn calculate_path(car: &traffic_light::SimplifiedCar) -> Vec<(f64, f64)> {
         match car.direction {
             Direction::Left => generate_left_turn_path(car.origin),
             Direction::Right => generate_right_turn_path(car.origin),
@@ -492,40 +503,23 @@ impl Car {
     }
 }
 
-fn get_position(origin: Origin, direction: Direction) -> (f64, f64) {
+fn get_position(origin: Origin) -> (f64, f64) {
     let middle = (WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0);
-    let offset = match direction {
-        Direction::Left => 0.0,
-        Direction::Straight => 1.0,
-        Direction::Right => 2.0,
-    };
     match origin {
-        Origin::North => (
-            middle.0 - LANE_WIDTH / 2.0 - offset * LANE_WIDTH,
-            -CAR_WIDTH / 2.0,
-        ),
-        Origin::South => (
-            middle.0 + LANE_WIDTH / 2.0 + offset * LANE_WIDTH,
-            HEIGHT as f64 + CAR_WIDTH / 2.0,
-        ),
-        Origin::East => (
-            WIDTH as f64 + CAR_WIDTH / 2.0,
-            middle.1 - LANE_WIDTH / 2.0 - offset * LANE_WIDTH,
-        ),
-        Origin::West => (
-            -CAR_WIDTH / 2.0,
-            middle.1 + LANE_WIDTH / 2.0 + offset * LANE_WIDTH,
-        ),
+        Origin::North => (middle.0 - LANE_WIDTH, CAR_WIDTH / 2.0),
+        Origin::South => (middle.0 + LANE_WIDTH, HEIGHT as f64 - CAR_WIDTH / 2.0),
+        Origin::East => (WIDTH as f64 - CAR_WIDTH / 2.0, middle.1 - LANE_WIDTH),
+        Origin::West => (CAR_WIDTH / 2.0, middle.1 + LANE_WIDTH),
     }
 }
 
 /// Generates the initial straight that all cars have to do before they can turn
-fn generate_straight_path_third(origin: Origin, direction: Direction) -> Vec<(f64, f64)> {
-    let vertical_point_gap = (HEIGHT as f64 / 2.0 - LANE_WIDTH * 3.0 + CAR_WIDTH / 2.0) as f64
+fn generate_straight_path_third(origin: Origin) -> Vec<(f64, f64)> {
+    let vertical_point_gap = (HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0 - CAR_WIDTH / 2.0) as f64
         / (NUM_PATH_POINTS / 3) as f64;
-    let horizontal_point_gap = (WIDTH as f64 / 2.0 - LANE_WIDTH * 3.0 + CAR_WIDTH / 2.0) as f64
+    let horizontal_point_gap = (WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0 - CAR_WIDTH / 2.0) as f64
         / (NUM_PATH_POINTS / 3) as f64;
-    let position = get_position(origin, direction);
+    let position = get_position(origin);
 
     match origin {
         Origin::North => (0..NUM_PATH_POINTS / 3)
@@ -544,27 +538,26 @@ fn generate_straight_path_third(origin: Origin, direction: Direction) -> Vec<(f6
 }
 
 fn generate_left_turn_path(origin: Origin) -> Vec<(f64, f64)> {
-    let middle = (WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0);
     // Initial straight
-    let mut path = generate_straight_path_third(origin, Direction::Left);
+    let mut path = generate_straight_path_third(origin);
 
     // Turn
     let turn_origin = match origin {
         Origin::North => (
-            middle.0 + LANE_WIDTH as f64 * 3.0,
-            middle.1 - LANE_WIDTH as f64 * 3.0,
+            WIDTH as f64 / 2.0 + LANE_WIDTH as f64 * 2.0,
+            HEIGHT as f64 / 2.0 - LANE_WIDTH as f64 * 2.0,
         ),
         Origin::South => (
-            middle.0 - LANE_WIDTH as f64 * 3.0,
-            middle.1 + LANE_WIDTH as f64 * 3.0,
+            WIDTH as f64 / 2.0 - LANE_WIDTH as f64 * 2.0,
+            HEIGHT as f64 / 2.0 + LANE_WIDTH as f64 * 2.0,
         ),
         Origin::East => (
-            middle.0 + LANE_WIDTH as f64 * 3.0,
-            middle.1 + LANE_WIDTH as f64 * 3.0,
+            WIDTH as f64 / 2.0 + LANE_WIDTH as f64 * 2.0,
+            HEIGHT as f64 / 2.0 + LANE_WIDTH as f64 * 2.0,
         ),
         Origin::West => (
-            middle.0 - LANE_WIDTH as f64 * 3.0,
-            middle.1 - LANE_WIDTH as f64 * 3.0,
+            WIDTH as f64 / 2.0 - LANE_WIDTH as f64 * 2.0,
+            HEIGHT as f64 / 2.0 - LANE_WIDTH as f64 * 2.0,
         ),
     };
     let turn_path = match origin {
@@ -574,8 +567,8 @@ fn generate_left_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                     / 2.0
                     - std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 - angle.cos() * LANE_WIDTH * 3.5,
-                    turn_origin.1 - angle.sin() * LANE_WIDTH * 3.5,
+                    turn_origin.0 - angle.cos() * LANE_WIDTH * 3.0,
+                    turn_origin.1 - angle.sin() * LANE_WIDTH * 3.0,
                 )
             })
             .collect::<Vec<_>>(),
@@ -585,8 +578,8 @@ fn generate_left_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                     / 2.0
                     + std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 - angle.cos() * LANE_WIDTH * 3.5,
-                    turn_origin.1 - angle.sin() * LANE_WIDTH * 3.5,
+                    turn_origin.0 - angle.cos() * LANE_WIDTH * 3.0,
+                    turn_origin.1 - angle.sin() * LANE_WIDTH * 3.0,
                 )
             })
             .collect::<Vec<_>>(),
@@ -596,8 +589,8 @@ fn generate_left_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                     / 2.0
                     + std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 - angle.sin() * LANE_WIDTH * 3.5,
-                    turn_origin.1 + angle.cos() * LANE_WIDTH * 3.5,
+                    turn_origin.0 - angle.sin() * LANE_WIDTH * 3.0,
+                    turn_origin.1 + angle.cos() * LANE_WIDTH * 3.0,
                 )
             })
             .collect::<Vec<_>>(),
@@ -607,46 +600,51 @@ fn generate_left_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                     / 2.0
                     + std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 + angle.sin() * LANE_WIDTH * 3.5,
-                    turn_origin.1 - angle.cos() * LANE_WIDTH * 3.5,
+                    turn_origin.0 + angle.sin() * LANE_WIDTH * 3.0,
+                    turn_origin.1 - angle.cos() * LANE_WIDTH * 3.0,
                 )
             })
             .collect::<Vec<_>>(),
     };
     path.extend(turn_path.iter().rev().collect::<Vec<_>>());
 
-    // Direction::Left so that the turning car goes into the nearest lane
-    let mut last_third_path = generate_straight_path_third(
-        match origin {
-            Origin::North => Origin::West,
-            Origin::South => Origin::East,
-            Origin::East => Origin::North,
-            Origin::West => Origin::South,
-        },
-        Direction::Left,
-    );
-    last_third_path.iter_mut().for_each(|point| match origin {
-        Origin::North => point.0 += middle.0 + LANE_WIDTH * 4.0,
-        Origin::South => point.0 -= middle.0 + LANE_WIDTH * 4.0,
-        Origin::East => point.1 += middle.1 + LANE_WIDTH * 4.0,
-        Origin::West => point.1 -= middle.1 + LANE_WIDTH * 4.0,
+    let straight_path = generate_straight_path(match origin {
+        Origin::North => Origin::West,
+        Origin::South => Origin::East,
+        Origin::East => Origin::North,
+        Origin::West => Origin::South,
     });
+    let straight_path = straight_path
+        .iter()
+        .skip(NUM_PATH_POINTS * 2 / 3 - 1)
+        .collect::<Vec<_>>();
 
-    path.extend(last_third_path);
+    path.extend(straight_path);
     path
 }
 
 fn generate_right_turn_path(origin: Origin) -> Vec<(f64, f64)> {
-    let middle = (WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0);
     // Initial straight
-    let mut path = generate_straight_path_third(origin, Direction::Right);
+    let mut path = generate_straight_path_third(origin);
 
     // Turn
     let turn_origin = match origin {
-        Origin::North => (middle.0 - LANE_WIDTH * 3.0, middle.1 - LANE_WIDTH * 3.0),
-        Origin::South => (middle.0 + LANE_WIDTH * 3.0, middle.1 + LANE_WIDTH * 3.0),
-        Origin::East => (middle.0 + LANE_WIDTH * 3.0, middle.1 - LANE_WIDTH * 3.0),
-        Origin::West => (middle.0 - LANE_WIDTH * 3.0, middle.1 + LANE_WIDTH * 3.0),
+        Origin::North => (
+            WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0,
+            HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0,
+        ),
+        Origin::South => (
+            WIDTH as f64 / 2.0 + LANE_WIDTH * 2.0,
+            HEIGHT as f64 / 2.0 + LANE_WIDTH * 2.0,
+        ),
+        Origin::East => (
+            WIDTH as f64 / 2.0 + LANE_WIDTH * 2.0,
+            HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0,
+        ),
+        Origin::West => (
+            WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0,
+            HEIGHT as f64 / 2.0 + LANE_WIDTH * 2.0,
+        ),
     };
     let turn_path = match origin {
         Origin::North => (0..NUM_PATH_POINTS / 3)
@@ -654,8 +652,8 @@ fn generate_right_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                 let angle =
                     (i as f64) / (NUM_PATH_POINTS as f64 / 3.0) * std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 + angle.cos() * LANE_WIDTH / 2.0,
-                    turn_origin.1 + angle.sin() * LANE_WIDTH / 2.0,
+                    turn_origin.0 + angle.cos() * LANE_WIDTH,
+                    turn_origin.1 + angle.sin() * LANE_WIDTH,
                 )
             })
             .collect::<Vec<_>>(),
@@ -664,8 +662,8 @@ fn generate_right_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                 let angle =
                     (i as f64) / (NUM_PATH_POINTS as f64 / 3.0) * std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 - angle.cos() * LANE_WIDTH / 2.0,
-                    turn_origin.1 - angle.sin() * LANE_WIDTH / 2.0,
+                    turn_origin.0 - angle.cos() * LANE_WIDTH,
+                    turn_origin.1 - angle.sin() * LANE_WIDTH,
                 )
             })
             .collect::<Vec<_>>(),
@@ -674,8 +672,8 @@ fn generate_right_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                 let angle =
                     (i as f64) / (NUM_PATH_POINTS as f64 / 3.0) * std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 - angle.sin() * LANE_WIDTH / 2.0,
-                    turn_origin.1 + angle.cos() * LANE_WIDTH / 2.0,
+                    turn_origin.0 - angle.sin() * LANE_WIDTH,
+                    turn_origin.1 + angle.cos() * LANE_WIDTH,
                 )
             })
             .collect::<Vec<_>>(),
@@ -684,32 +682,26 @@ fn generate_right_turn_path(origin: Origin) -> Vec<(f64, f64)> {
                 let angle =
                     (i as f64) / (NUM_PATH_POINTS as f64 / 3.0) * std::f64::consts::PI / 2.0;
                 (
-                    turn_origin.0 + angle.sin() * LANE_WIDTH / 2.0,
-                    turn_origin.1 - angle.cos() * LANE_WIDTH / 2.0,
+                    turn_origin.0 + angle.sin() * LANE_WIDTH,
+                    turn_origin.1 - angle.cos() * LANE_WIDTH,
                 )
             })
             .collect::<Vec<_>>(),
     };
     path.extend(turn_path);
 
-    // Direction::Right so that the turning car goes into the nearest lane
-    let mut last_third_path = generate_straight_path_third(
-        match origin {
-            Origin::North => Origin::East,
-            Origin::South => Origin::West,
-            Origin::East => Origin::South,
-            Origin::West => Origin::North,
-        },
-        Direction::Right,
-    );
-    last_third_path.iter_mut().for_each(|point| match origin {
-        Origin::North => point.0 -= middle.0 + LANE_WIDTH * 4.0,
-        Origin::South => point.0 += middle.0 + LANE_WIDTH * 4.0,
-        Origin::East => point.1 -= middle.1 + LANE_WIDTH * 4.0,
-        Origin::West => point.1 += middle.1 + LANE_WIDTH * 4.0,
+    let straight_path = generate_straight_path(match origin {
+        Origin::North => Origin::East,
+        Origin::South => Origin::West,
+        Origin::East => Origin::South,
+        Origin::West => Origin::North,
     });
+    let straight_path = straight_path
+        .iter()
+        .skip(NUM_PATH_POINTS * 2 / 3 - 1)
+        .collect::<Vec<_>>();
 
-    path.extend(last_third_path);
+    path.extend(straight_path);
     path
 }
 
@@ -717,7 +709,7 @@ fn generate_straight_path(origin: Origin) -> Vec<(f64, f64)> {
     let vertical_point_gap = (HEIGHT as f64 + CAR_WIDTH / 2.0) as f64 / NUM_PATH_POINTS as f64;
     let horizontal_point_gap = (WIDTH as f64 + CAR_WIDTH / 2.0) as f64 / NUM_PATH_POINTS as f64;
 
-    let position = get_position(origin, Direction::Straight);
+    let position = get_position(origin);
     match origin {
         Origin::North => {
             let mut path = Vec::new();

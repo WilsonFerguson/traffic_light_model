@@ -5,30 +5,28 @@ use piston_window::*;
 use rand::Rng;
 use std::{
     path,
-    time::{self, Duration, Instant},
+    time::{self, Instant},
 };
 
 mod car;
 mod traffic_light;
-mod traffic_light_controller;
 
 pub const WIDTH: u32 = 1280;
 pub const HEIGHT: u32 = 1280;
 
 pub const USE_ENTRY_TIME: bool = true;
+/// Allow the lane opposite of the current green to go straight/right when possible
+pub const ALLOW_MOVING_ON_RED: bool = false;
 /// Allow cars to go into the intersection when they have a yellow light
-pub const ALLOW_GO_ON_YELLOW: bool = true;
-
-pub const YELLOW_TIME: Duration = Duration::from_millis(1500);
-pub const MINIMUM_GREEN_TIME: Duration = Duration::from_millis(200);
+pub const ALLOW_GO_ON_YELLOW: bool = false;
 
 fn draw_map(context: &Context, graphics: &mut G2d) {
     let middle = (WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0);
     [
         [0.0, 0.0],
-        [middle.0 + LANE_WIDTH * 3.0, 0.0],
-        [0.0, middle.1 + LANE_WIDTH * 3.0],
-        [middle.0 + LANE_WIDTH * 3.0, middle.1 + LANE_WIDTH * 3.0],
+        [middle.0 + LANE_WIDTH * 2.0, 0.0],
+        [0.0, middle.1 + LANE_WIDTH * 2.0],
+        [middle.0 + LANE_WIDTH * 2.0, middle.1 + LANE_WIDTH * 2.0],
     ]
     .iter()
     .for_each(|&start| {
@@ -37,89 +35,82 @@ fn draw_map(context: &Context, graphics: &mut G2d) {
             [
                 start[0],
                 start[1],
-                WIDTH as f64 / 2.0 - LANE_WIDTH * 3.0,
-                HEIGHT as f64 / 2.0 - LANE_WIDTH * 3.0,
+                WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0,
+                HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0,
             ],
             context.transform,
             graphics,
         );
     });
 
-    let dash_gap_percent = 4.0 / 5.0;
-    let num_dashes: u32 = 8;
-    let dash_width = 2.0;
+    let dash_gap_percent = 2.0 / 5.0;
+    let num_dashes: u32 = 10;
+    let dash_width = 3.0;
 
     // Horizontal dashes
     let dash_length =
-        (middle.0 - LANE_WIDTH * 3.0) / (num_dashes as f64 * (1.0 + dash_gap_percent));
+        (middle.0 - LANE_WIDTH * 2.0) / (num_dashes as f64 * (1.0 + dash_gap_percent));
     let dash_gap = dash_length * dash_gap_percent;
-    for i in 0..(((middle.0 - LANE_WIDTH * 3.0) / (dash_length + dash_gap)) as u32) {
+    for i in 0..(((middle.0 - LANE_WIDTH * 2.0) / (dash_length + dash_gap)) as u32) {
         let mut start = i as f64 * (dash_length + dash_gap) + dash_gap / 2.0;
         for _ in 0..2 {
-            for j in -2..=2 {
-                if j == 0 {
-                    continue;
-                }
-
-                let y = middle.1 + LANE_WIDTH * j as f64;
-                line_from_to(
-                    [1.0; 4],
-                    dash_width,
-                    [start, y],
-                    [start + dash_length, y],
-                    context.transform,
-                    graphics,
-                );
-            }
-            start += middle.0 + LANE_WIDTH * 3.0;
+            line_from_to(
+                [1.0; 4],
+                dash_width,
+                [start, middle.1],
+                [start + dash_length, middle.1],
+                context.transform,
+                graphics,
+            );
+            start += middle.0 + LANE_WIDTH * 2.0;
         }
     }
 
     // Vertical dashes
     let dash_length =
-        (middle.1 - LANE_WIDTH * 3.0) / (num_dashes as f64 * (1.0 + dash_gap_percent));
+        (middle.1 - LANE_WIDTH * 2.0) / (num_dashes as f64 * (1.0 + dash_gap_percent));
     let dash_gap = dash_length * dash_gap_percent;
-    for i in 0..(((middle.1 - LANE_WIDTH * 3.0) / (dash_length + dash_gap)) as u32) {
+    for i in 0..(((middle.1 - LANE_WIDTH * 2.0) / (dash_length + dash_gap)) as u32) {
         let mut start = i as f64 * (dash_length + dash_gap) + dash_gap / 2.0;
         for _ in 0..2 {
-            for j in -2..=2 {
-                if j == 0 {
-                    continue;
-                }
-                let x = middle.0 + LANE_WIDTH * j as f64;
-                line_from_to(
-                    [1.0; 4],
-                    dash_width,
-                    [x, start],
-                    [x, start + dash_length],
-                    context.transform,
-                    graphics,
-                );
-            }
-            start += middle.1 + LANE_WIDTH * 3.0;
+            line_from_to(
+                [1.0; 4],
+                dash_width,
+                [middle.0, start],
+                [middle.0, start + dash_length],
+                context.transform,
+                graphics,
+            );
+            start += middle.1 + LANE_WIDTH * 2.0;
         }
     }
 
-    // Solid lines
+    // Stop lines
     for i in 0..2 {
         line_from_to(
             [1.0; 4],
-            dash_width,
-            [i as f64 * (middle.0 + LANE_WIDTH * 3.0), middle.1],
+            2.0,
             [
-                i as f64 * (middle.0 + LANE_WIDTH * 3.0) + middle.0 - LANE_WIDTH * 3.0,
-                middle.1,
+                WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0 + LANE_WIDTH * 2.0 * i as f64,
+                HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0 + LANE_WIDTH * 4.0 * i as f64,
+            ],
+            [
+                WIDTH as f64 / 2.0 + LANE_WIDTH * 2.0 * i as f64,
+                HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0 + LANE_WIDTH * 4.0 * i as f64,
             ],
             context.transform,
             graphics,
         );
         line_from_to(
             [1.0; 4],
-            dash_width,
-            [middle.0, i as f64 * (middle.1 + LANE_WIDTH * 3.0)],
+            2.0,
             [
-                middle.0,
-                i as f64 * (middle.1 + LANE_WIDTH * 3.0) + middle.0 - LANE_WIDTH * 3.0,
+                WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0 + LANE_WIDTH * 4.0 * i as f64,
+                HEIGHT as f64 / 2.0 - LANE_WIDTH * 2.0 * i as f64,
+            ],
+            [
+                WIDTH as f64 / 2.0 - LANE_WIDTH * 2.0 + LANE_WIDTH * 4.0 * i as f64,
+                HEIGHT as f64 / 2.0 + LANE_WIDTH * 2.0 - LANE_WIDTH * 2.0 * i as f64,
             ],
             context.transform,
             graphics,
@@ -144,7 +135,7 @@ fn main() {
     let mut id: usize = 0;
 
     let mut spawn_start = Instant::now();
-    let mut spawn_increment = time::Duration::from_millis(800);
+    let mut spawn_increment = time::Duration::from_millis(1000);
     let origins = [
         car::Origin::North,
         car::Origin::South,
@@ -153,7 +144,7 @@ fn main() {
     ];
     let mut origin_index = 0;
 
-    let mut traffic_light = traffic_light_controller::TrafficLightController::new();
+    let mut traffic_light = traffic_light::TrafficLight::new();
 
     let mut paused: bool = false;
     let mut last_paused: Instant = Instant::now();
@@ -166,82 +157,24 @@ fn main() {
             draw_map(&context, graphics);
 
             let cars_clone = cars.clone();
-            // if !paused {
-            //     traffic_light.update();
-            //
-            //     if spawn_start.elapsed() >= spawn_increment {
-            //         let minimum_time = 400.0;
-            //         spawn_increment = time::Duration::from_millis(
-            //             (spawn_increment.as_millis() as f64 * 0.9975).max(minimum_time) as u64,
-            //         );
-            //
-            //         let mut origin = origins[rand::thread_rng().gen_range(0..origins.len())];
-            //         if spawn_increment.as_millis() <= 700 {
-            //             origin = origins[origin_index];
-            //             origin_index = (origin_index + 1) % origins.len();
-            //         }
-            //         let direction = car::Direction::from(rand::thread_rng().gen_range(0..=2));
-            //         cars.push(car::Car::new(id, origin, direction));
-            //         traffic_light.add_car(traffic_light_controller::SimplifiedCar::new(
-            //             origin, direction,
-            //         ));
-            //         id += 1;
-            //         if id > 1000 {
-            //             id = 0;
-            //         }
-            //
-            //         spawn_start = time::Instant::now();
-            //     }
-            //
-            //     cars.iter_mut().for_each(|car| {
-            //         car.update(&cars_clone, &mut traffic_light);
-            //     });
-            //
-            //     for i in (0..cars.len()).rev() {
-            //         if cars[i].finished {
-            //             cars.remove(i);
-            //         }
-            //     }
-            // }
-
-            cars.iter_mut()
-                .for_each(|car| car.draw(&cars_clone, &context, graphics));
-
-            traffic_light.draw(&context, graphics);
-
-            text::Text::new_color([0.0, 0.0, 0.0, 1.0], 20)
-                .draw(
-                    format!("Spawn increment: {:?}", spawn_increment).as_str(),
-                    &mut glyphs,
-                    &context.draw_state,
-                    context.transform.trans(20.0, 35.0),
-                    graphics,
-                )
-                .unwrap();
-            glyphs.factory.encoder.flush(device);
-        });
-
-        if let Some(args) = event.update_args() {
             if !paused {
-                let cars_clone = cars.clone();
                 traffic_light.update();
 
                 if spawn_start.elapsed() >= spawn_increment {
-                    let minimum_time = 400.0;
+                    let minimum_time = 650.0; // 550
                     spawn_increment = time::Duration::from_millis(
                         (spawn_increment.as_millis() as f64 * 0.9975).max(minimum_time) as u64,
                     );
 
                     let mut origin = origins[rand::thread_rng().gen_range(0..origins.len())];
+                    // 630
                     if spawn_increment.as_millis() <= 700 {
                         origin = origins[origin_index];
                         origin_index = (origin_index + 1) % origins.len();
                     }
                     let direction = car::Direction::from(rand::thread_rng().gen_range(0..=2));
                     cars.push(car::Car::new(id, origin, direction));
-                    traffic_light.add_car(traffic_light_controller::SimplifiedCar::new(
-                        origin, direction,
-                    ));
+                    traffic_light.add_car(traffic_light::SimplifiedCar::new(origin, direction));
                     id += 1;
                     if id > 1000 {
                         id = 0;
@@ -260,7 +193,25 @@ fn main() {
                     }
                 }
             }
-        }
+
+            traffic_light.draw(&context, graphics);
+            traffic_light.draw_stats(&mut glyphs, &context, graphics);
+
+            cars.iter_mut()
+                .for_each(|car| car.draw(&cars_clone, &context, graphics));
+
+            text::Text::new_color([0.0, 0.0, 0.0, 1.0], 20)
+                .draw(
+                    format!("Spawn increment: {:?}", spawn_increment).as_str(),
+                    &mut glyphs,
+                    &context.draw_state,
+                    context.transform.trans(20.0, 35.0),
+                    graphics,
+                )
+                .unwrap();
+            glyphs.factory.encoder.flush(device);
+        });
+
         event.button(|button| {
             if button.state != ButtonState::Press {
                 return;
